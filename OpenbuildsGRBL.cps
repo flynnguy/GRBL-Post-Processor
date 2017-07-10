@@ -16,17 +16,24 @@ This post-Processor should work on GRBL-based machines such as
 30/JAN/2017 - V6 : Modified capabilities to also allow waterjet, laser-cutting..
 07/JUL/2017 - V7 : Modified specifically for MAXT Makerspace Machine
 */
-description = "MAXT Grbl";
-vendor = "Openbuilds";
-vendorUrl = "http://openbuilds.com";
-model = "OX";
-description = "Open Hardware Desktop CNC Router";
-legal = "Copyright (C) 2012-2016 by Autodesk, Inc.";
-certificationLevel = 2;
 
-extension = "nc"; // file extension of the gcode file
-setCodePage("ascii"); // character set of the gcode file
-//setEOL(CRLF);											// end-of-line type : use CRLF for windows
+var description = "MAXT Grbl";
+var vendor = "MAXT";
+var vendorUrl = "http://openbuilds.com";
+var model = "OX CNC 1000 x 750";
+var description = "Open Hardware Desktop CNC Router";
+var legal = "Copyright (C) 2012-2016 by Autodesk, Inc.";
+var certificationLevel = 2;
+var grblControls = "GRBL V0.9j";
+var width = 600;
+var depth = 800;
+var height = 120;
+var maxSpindlePower = 700;
+var maxSpindleSpeed = 30000;
+
+var extension = "nc";       // file extension of the gcode file
+setCodePage("ascii");       // character set of the gcode file
+//setEOL(CRLF);			    // end-of-line type : use CRLF for windows
 
 capabilities = CAPABILITY_MILLING | CAPABILITY_JET;     // intended for a CNC, so Milling
 tolerance = spatial(0.005, MM);
@@ -49,7 +56,7 @@ properties = {
     hasSpeedDial: true,             // true : the spindle is of type Makite RT0700, Dewalt 611 with a Dial to set speeds 1-6. false : other spindle
     machineHomeZ: -10,              // absolute machine coordinates where the machine will move to at the end of the job - first retracting Z, then moving home X Y
     machineHomeX: -10,
-    machineHomeY: -10
+    machineHomeY: -10,
 };
 
 // creation of all kinds of G-code formats - controls the amount of decimals used in the generated G-Code
@@ -131,6 +138,8 @@ function writeComment(text) {
     writeln("(" + String(text).replace(/[^a-zA-Z\d :=,.]+/g, " ") + ")");
 }
 
+// onOpen() is invoked once at post processing initialization. This is the place to output the program header.
+// The configuration script is not allowed to modify the entry functions after onOpen() has been invoked.
 function onOpen() {
     // Number of checks capturing fatal errors
     // 1. is CAD file in same units as our GRBL configuration ?
@@ -150,19 +159,19 @@ function onOpen() {
 
     // 3. here you set all the properties of your machine, so they can be used later on
     var myMachine = getMachineConfiguration();
-    myMachine.setWidth(600);
-    myMachine.setDepth(800);
-    myMachine.setHeight(130);
-    myMachine.setMaximumSpindlePower(700);
-    myMachine.setMaximumSpindleSpeed(30000);
+    myMachine.setWidth(width);
+    myMachine.setDepth(depth);
+    myMachine.setHeight(height);
+    myMachine.setMaximumSpindlePower(maxSpindlePower);
+    myMachine.setMaximumSpindleSpeed(maxSpindleSpeed);
     myMachine.setMilling(true);
     myMachine.setTurning(false);
     myMachine.setToolChanger(false);
     myMachine.setNumberOfTools(1);
     myMachine.setNumberOfWorkOffsets(6);
-    myMachine.setVendor("OpenBuilds");
-    myMachine.setModel("OX CNC 1000 x 750");
-    myMachine.setControl("GRBL V0.9j");
+    myMachine.setVendor(vendor);
+    myMachine.setModel(model);
+    myMachine.setControl(grblControls);
 
     writeln("%"); // Punch-Tape Begin, commented out as not supported by GRBL
 
@@ -231,6 +240,7 @@ function onOpen() {
     writeln("");
 }
 
+// onComment() is invoked for each comment.
 function onComment(message) {
     writeComment(message);
 }
@@ -246,10 +256,12 @@ function forceAny() {
     feedOutput.reset();
 }
 
+// onSection() is invoked at the start of a section. A section commonly corresponds to an individual operation within the CAM system.
+// However, note that it is perfectly legal from the post processors perspective if an operation generated multiple sections.
 function onSection() {
     var nmbrOfSections = getNumberOfSections(); // how many operations are there in total
-    var sectionId = getCurrentSectionId(); // what is the number of this operation (starts from 0)
-    var section = getSection(sectionId); // what is the section-object for this operation
+    var sectionId = getCurrentSectionId();      // what is the number of this operation (starts from 0)
+    var section = getSection(sectionId);        // what is the section-object for this operation
 
     // Insert a small comment section to identify the related G-Code in a large multi-operations file
     var comment = "Operation " + (sectionId + 1) + " of " + nmbrOfSections;
@@ -265,6 +277,7 @@ function onSection() {
     if (isFirstSection()) {
         writeBlock(gAbsIncModal.format(90)); // Set to absolute coordinates
         if (isMilling()) {
+            writeComment("Move Z-Home");
             writeBlock(gFormat.format(53), gMotionModal.format(0), "Z" + xyzFormat.format(properties.machineHomeZ)); // Retract spindle to Machine Z Home
         }
     }
@@ -272,29 +285,30 @@ function onSection() {
     // Write the WCS, ie. G54 or higher.. default to WCS1 / G54 if no or invalid WCS in order to prevent using Machine Coordinates G53
     if ((section.workOffset < 1) || (section.workOffset > 6)) {
         alert("Warning", "Invalid Work Coordinate System. Select WCS 1..6 in CAM software. Selecting default WCS1/G54");
+        writeComment("Invalid Work Coordinate System. Select WCS 1..6 in CAM software. Selecting default WCS1/G54");
         //section.workOffset = 1;	// If no WCS is set (or out of range), then default to WCS1 / G54 : swarfer: this appears to be readonly
         writeBlock(gFormat.format(54)); // output what we want, G54
     } else {
         writeBlock(gFormat.format(53 + section.workOffset)); // use the selected WCS
     }
 
-    var tool = section.getTool();
+    /* var tool = section.getTool(); */
 
-    // Insert the Spindle start command
-    if (tool.clockwise) {
-        writeBlock(sOutput.format(tool.spindleRPM), mFormat.format(3));
-    } else if (properties.spindleTwoDirections) {
-        writeBlock(sOutput.format(tool.spindleRPM), mFormat.format(4));
-    } else {
-        alert("Error", "Counter-clockwise Spindle Operation found, but your spindle does not support this");
-        error("Fatal Error in Operation " + (sectionId + 1) + ": Counter-clockwise Spindle Operation found, but your spindle does not support this");
-        return;
-    }
+    /* // Insert the Spindle start command */
+    /* if (tool.clockwise) { */
+    /*     writeBlock(sOutput.format(tool.spindleRPM), mFormat.format(3)); */
+    /* } else if (properties.spindleTwoDirections) { */
+    /*     writeBlock(sOutput.format(tool.spindleRPM), mFormat.format(4)); */
+    /* } else { */
+    /*     alert("Error", "Counter-clockwise Spindle Operation found, but your spindle does not support this"); */
+    /*     error("Fatal Error in Operation " + (sectionId + 1) + ": Counter-clockwise Spindle Operation found, but your spindle does not support this"); */
+    /*     return; */
+    /* } */
 
-    // Wait some time for spindle to speed up - only on first section, as spindle is not powered down in-between sections
-    if (isFirstSection()) {
-        onDwell(properties.spindleOnOffDelay);
-    }
+    /* // Wait some time for spindle to speed up - only on first section, as spindle is not powered down in-between sections */
+    /* if (isFirstSection()) { */
+    /*     onDwell(properties.spindleOnOffDelay); */
+    /* } */
 
     // If the machine has coolant, write M8 or M9
     if (properties.hasCoolant) {
@@ -317,19 +331,23 @@ function onSection() {
     forceAny();
 
     // Rapid move to initial position, first XY, then Z
+    writeComment("Move to initial position...");
     var initialPosition = getFramePosition(currentSection.getInitialPosition());
     writeBlock(gAbsIncModal.format(90), gMotionModal.format(0), xOutput.format(initialPosition.x), yOutput.format(initialPosition.y));
     writeBlock(gMotionModal.format(0), zOutput.format(initialPosition.z));
 }
 
+// onDwell() is invoked per dwell command.
 function onDwell(seconds) {
     writeBlock(gFormat.format(4), "P" + secFormat.format(seconds));
 }
 
+// onSpindleSpeed is invoked when the spindle speed changes. The property 'spindleSpeed' specifies the current spindleSpeed.
 function onSpindleSpeed(spindleSpeed) {
     writeBlock(sOutput.format(spindleSpeed));
 }
 
+// onRadiusCompensation() is invoked when the radius compensation mode changes. The property 'radiusCompensation' specifies the current radius compensation mode.
 function onRadiusCompensation() {
     var radComp = getRadiusCompensation();
     var sectionId = getCurrentSectionId();
@@ -340,6 +358,7 @@ function onRadiusCompensation() {
     }
 }
 
+// onRapid() is invoked per linear rapid (high-feed) motion. Make sure to prevent dog-leg movement in the generated program.
 function onRapid(_x, _y, _z) {
     var x = xOutput.format(_x);
     var y = yOutput.format(_y);
@@ -350,6 +369,7 @@ function onRapid(_x, _y, _z) {
     }
 }
 
+// onLinear() is invoked per linear motion.
 function onLinear(_x, _y, _z, feed) {
     var x = xOutput.format(_x);
     var y = yOutput.format(_y);
@@ -367,16 +387,19 @@ function onLinear(_x, _y, _z, feed) {
     }
 }
 
+// onRapid5D() is invoked per linear 5-axis rapid motion.
 function onRapid5D(_x, _y, _z, _a, _b, _c) {
     alert("Error", "Tool-Rotation detected - GRBL only supports 3 Axis");
     error("Tool-Rotation detected but GRBL only supports 3 Axis");
 }
 
+// onLinear() is invoked per linear motion.
 function onLinear5D(_x, _y, _z, _a, _b, _c, feed) {
     alert("Error", "Tool-Rotation detected - GRBL only supports 3 Axis");
     error("Tool-Rotation detected but GRBL only supports 3 Axis");
 }
 
+// onCircular() is invoked per circular motion.
 function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
     var start = getCurrentPosition();
 
@@ -416,12 +439,14 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
     }
 }
 
+// onSectionEnd() is invoked at the termination of a section.
 function onSectionEnd() {
     // writeBlock(gPlaneModal.format(17));
     forceAny();
     writeln("");
 }
 
+// onClose() is invoked at post processing completion. This is the place to output your program footer.
 function onClose() {
     writeBlock(gAbsIncModal.format(90)); // Set to absolute coordinates for the following moves
     if (isMilling()) {
